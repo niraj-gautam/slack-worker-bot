@@ -11,7 +11,6 @@ http.createServer((_, res) => {
 
   try {
     console.log('[start] Running setup...');
-    execSync('sh setup-repo.sh', { stdio: 'inherit' });
     console.log('[start] Setup done, starting bot...');
     require('./node_modules/ts-node').register({ transpileOnly: true });
     require('./src/app.ts');

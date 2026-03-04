@@ -9,4 +9,4 @@ packages = ["nodejs_20", "git"]
 REPO_LOCAL_PATH = "./repo-workspace"
 
 [deployment]
-run = ["sh", "-c", "npm install && node start.js"]
+run = ["sh", "-c", "npm install && sh setup-repo.sh && node start.js"]
