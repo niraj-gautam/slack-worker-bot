@@ -3,7 +3,10 @@ entrypoint = "src/app.ts"
 
 [nix]
 channel = "stable-24_05"
-packages = ["git"]
+packages = ["nodejs_20", "git"]
 
 [env]
 REPO_LOCAL_PATH = "./repo-workspace"
+
+[deployment]
+run = ["sh", "-c", "npm install && npm start"]
