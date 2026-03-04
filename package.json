@@ -1,0 +1,22 @@
+{
+  "name": "slack-worker-bot",
+  "version": "1.0.0",
+  "description": "Slack bot to create PM2 worker entries for portpro-orderful-service",
+  "main": "src/app.ts",
+  "scripts": {
+    "dev": "ts-node src/app.ts",
+    "start": "sh setup-repo.sh && ts-node src/app.ts"
+  },
+  "dependencies": {
+    "@octokit/rest": "^21.0.0",
+    "@slack/bolt": "^4.1.0",
+    "axios": "^1.7.0",
+    "dotenv": "^16.4.0",
+    "simple-git": "^3.27.0",
+    "ts-node": "^10.9.0",
+    "typescript": "^5.7.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0"
+  }
+}

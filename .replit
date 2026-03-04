@@ -1,0 +1,11 @@
+run = "npm start"
+entrypoint = "src/app.ts"
+
+[nix]
+channel = "stable-24_05"
+
+[nix.packages]
+git = "git"
+
+[env]
+REPO_LOCAL_PATH = "./repo-workspace"
