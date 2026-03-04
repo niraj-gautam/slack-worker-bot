@@ -260,15 +260,15 @@ function buildPRBody(org: string, environment: string, configFile: string, resul
 
 import http from 'http';
 
+const port = process.env.PORT || 3000;
+http.createServer((_, res) => {
+  res.writeHead(200);
+  res.end('Worker Bot is running');
+}).listen(port, () => {
+  console.log(`[bot] Health check listening on port ${port}`);
+});
+
 (async () => {
   await app.start();
   console.log('Slack Worker Bot is running!');
-
-  const port = process.env.PORT || 3000;
-  http.createServer((_, res) => {
-    res.writeHead(200);
-    res.end('Worker Bot is running');
-  }).listen(port, () => {
-    console.log(`[bot] Health check listening on port ${port}`);
-  });
 })();
