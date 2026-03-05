@@ -15,6 +15,7 @@ import {
 } from './services/git';
 import { ResolvedWorker, WorkerResult } from './types';
 import path from 'path';
+import { logger, cleanOldLogs } from './logger';
 
 const app = new App({
   token: env.slackBotToken,
@@ -79,13 +80,13 @@ app.event('app_mention', async ({ event, client }) => {
       return;
     }
     busy = true;
-    console.log(`[bot] Parsing message: "${event.text}"`);
+    logger.info(`Parsing message: "${event.text}"`);
     const request = parseMessage(event.text);
     const mapping = getMapping(request.org, request.env);
     const baseBranch = mapping.branch;
     const configFile = mapping.file;
     const targetBranch = request.branch ?? baseBranch;
-    console.log(`[bot] Parsed: org=${request.org} env=${request.env} workers=${request.workers.length} file=${configFile} baseBranch=${baseBranch} targetBranch=${targetBranch}`);
+    logger.info(`Parsed: org=${request.org} env=${request.env} workers=${request.workers.length} file=${configFile} baseBranch=${baseBranch} targetBranch=${targetBranch}`);
 
     await say(channel, ts, `Processing *${request.org} ${request.env}* worker request...`);
 
@@ -93,21 +94,21 @@ app.event('app_mention', async ({ event, client }) => {
     const resolved: ResolvedWorker[] = [];
     for (const spec of request.workers) {
       if (spec.connectionId != null) {
-        console.log(`[bot] Fetching connection ${spec.connectionId} from ${mapping.connectionApiUrl}`);
+        logger.info(`Fetching connection ${spec.connectionId} from ${mapping.connectionApiUrl}`);
         await say(channel, ts, `Fetching connection ${spec.connectionId} from ${request.org} ${request.env} API...`);
         const conn = await fetchConnection(spec.connectionId, mapping.connectionApiUrl, mapping.connectionApiToken);
         const isas = extractISAs(conn);
-        console.log(`[bot] Connection ${spec.connectionId} resolved: live=${isas.liveISA.customerISA}.${isas.liveISA.companyISA} test=${isas.testISA.customerISA}.${isas.testISA.companyISA}`);
+        logger.info(`Connection ${spec.connectionId} resolved: live=${isas.liveISA.customerISA}.${isas.liveISA.companyISA} test=${isas.testISA.customerISA}.${isas.testISA.companyISA}`);
         resolved.push({ ...isas, name: spec.name });
       } else if (spec.liveISA && spec.testISA) {
-        console.log(`[bot] Direct ISAs: live=${spec.liveISA.customerISA}.${spec.liveISA.companyISA} test=${spec.testISA.customerISA}.${spec.testISA.companyISA}`);
+        logger.info(`Direct ISAs: live=${spec.liveISA.customerISA}.${spec.liveISA.companyISA} test=${spec.testISA.customerISA}.${spec.testISA.companyISA}`);
         resolved.push({
           liveISA: spec.liveISA,
           testISA: spec.testISA,
           name: spec.name,
         });
       } else {
-        console.log(`[bot] Skipping invalid spec: ${JSON.stringify(spec)}`);
+        logger.info(`Skipping invalid spec: ${JSON.stringify(spec)}`);
         await say(channel, ts, `Skipping invalid worker spec (no connection ID or ISAs).`);
       }
     }
@@ -118,14 +119,14 @@ app.event('app_mention', async ({ event, client }) => {
     }
 
     // 2. Prepare git: checkout base branch, pull latest
-    console.log(`[bot] Git: checking out ${baseBranch}`);
+    logger.info(`Git: checking out ${baseBranch}`);
     await say(channel, ts, `Checking out branch \`${baseBranch}\` and pulling latest...`);
     await prepareBaseBranch(baseBranch);
-    console.log(`[bot] Git: branch ${baseBranch} ready`);
+    logger.info(`Git: branch ${baseBranch} ready`);
 
     // 3. Add workers to config file (with duplicate detection)
     const filePath = path.resolve(env.repoLocalPath, configFile);
-    console.log(`[bot] Adding workers to ${filePath}`);
+    logger.info(`Adding workers to ${filePath}`);
     await say(channel, ts, `Adding workers to \`${configFile}\`...`);
 
     const results = addWorkersToFile({
@@ -137,7 +138,7 @@ app.event('app_mention', async ({ event, client }) => {
 
     const created = results.filter(r => r.status === 'created');
     const duplicates = results.filter(r => r.status === 'duplicate');
-    console.log(`[bot] Workers: ${created.length} created, ${duplicates.length} duplicates`);
+    logger.info(`Workers: ${created.length} created, ${duplicates.length} duplicates`);
 
     if (created.length === 0) {
       await say(channel, ts, `Worker topic(s) already exist in \`${configFile}\`, no changes needed.\n${formatDuplicates(duplicates)}`);
@@ -153,7 +154,7 @@ app.event('app_mention', async ({ event, client }) => {
     const dateSuffix = `${now.getDate()}-${months[now.getMonth()]}`;
     const baseBranchName = `worker/${request.org}-${isaLabel}-${dateSuffix}`.toLowerCase();
     const featureBranch = await resolveUniqueBranchName(baseBranchName);
-    console.log(`[bot] Feature branch: ${featureBranch}`);
+    logger.info(`Feature branch: ${featureBranch}`);
 
     await createFeatureBranch(featureBranch);
 
@@ -164,28 +165,28 @@ app.event('app_mention', async ({ event, client }) => {
     const uniqueISAs = [...new Set(isaList)].join(', ');
     const commitMsg = `Add ${request.org} ${request.env} worker(s)\n\nISAs: ${uniqueISAs}`;
 
-    console.log(`[bot] Committing and pushing: ${commitMsg}`);
+    logger.info(`Committing and pushing: ${commitMsg}`);
     await say(channel, ts, `Committing and pushing to \`${featureBranch}\`...`);
     await commitAndPush(configFile, featureBranch, commitMsg);
-    console.log(`[bot] Pushed to origin/${featureBranch}`);
+    logger.info(`Pushed to origin/${featureBranch}`);
 
     // 5. Ensure target branch exists, then create PR
     if (targetBranch !== baseBranch) {
-      console.log(`[bot] Ensuring target branch ${targetBranch} exists`);
+      logger.info(`Ensuring target branch ${targetBranch} exists`);
       await ensureBranchExists(targetBranch, baseBranch);
     }
 
     const prTitle = `[Worker] Add ${request.org} ${request.env} worker(s): ${isaLabel}`;
     const prBody = buildPRBody(request.org, request.env, configFile, results);
 
-    console.log(`[bot] Creating PR: ${featureBranch} -> ${targetBranch}`);
+    logger.info(`Creating PR: ${featureBranch} -> ${targetBranch}`);
     await say(channel, ts, `Creating PR to \`${targetBranch}\`...`);
     const prUrl = await createPullRequest(featureBranch, targetBranch, prTitle, prBody);
-    console.log(`[bot] PR created: ${prUrl}`);
+    logger.info(`PR created: ${prUrl}`);
 
     // 6. Cleanup: switch back to base branch locally
     await cleanupLocalBranch(baseBranch, featureBranch);
-    console.log(`[bot] Cleanup done, back on ${baseBranch}`);
+    logger.info(`Cleanup done, back on ${baseBranch}`);
 
     // 7. Report back — in thread, broadcast to channel, mention user
     const userMention = event.user ? `<@${event.user}>` : '';
@@ -202,7 +203,7 @@ app.event('app_mention', async ({ event, client }) => {
       ? `Parse error: ${err.message}`
       : `Something went wrong. Please check the request and try again.`;
     await say(channel, ts, msg);
-    console.error('Worker bot error:', err);
+    logger.error('Worker bot error:', err);
     try { await resetLocalRepo(); } catch { /* best-effort cleanup */ }
   } finally {
     busy = false;
@@ -259,6 +260,8 @@ function buildPRBody(org: string, environment: string, configFile: string, resul
 }
 
 (async () => {
+  cleanOldLogs();
+  setInterval(cleanOldLogs, 24 * 60 * 60 * 1000);
   await app.start();
-  console.log('Slack Worker Bot is running!');
+  logger.info('Slack Worker Bot is running!');
 })();
