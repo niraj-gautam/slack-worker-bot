@@ -199,9 +199,14 @@ app.event('app_mention', async ({ event, client }) => {
     });
 
   } catch (err: any) {
-    const msg = err instanceof ParseError
-      ? `Parse error: ${err.message}`
-      : `Something went wrong. Please check the request and try again.`;
+    let msg: string;
+    if (err instanceof ParseError) {
+      msg = `Parse error: ${err.message}`;
+    } else if (isGitHubAuthError(err)) {
+      msg = `:warning: *GitHub token is expired or invalid.* The bot cannot push code or create PRs until the token is replaced.`;
+    } else {
+      msg = `Something went wrong. Please check the request and try again.`;
+    }
     await say(channel, ts, msg);
     logger.error('Worker bot error:', err);
     try { await resetLocalRepo(); } catch { /* best-effort cleanup */ }
@@ -209,6 +214,22 @@ app.event('app_mention', async ({ event, client }) => {
     busy = false;
   }
 });
+
+function isGitHubAuthError(err: any): boolean {
+  const isOctokitAuth =
+    (err?.status === 401 || err?.status === 403) &&
+    (err?.response?.url?.includes('github.com') || err?.documentation_url?.includes('github'));
+
+  if (isOctokitAuth) return true;
+
+  const message = (err?.message ?? '').toLowerCase();
+  return (
+    message.includes('bad credentials') ||
+    message.includes('authentication failed for') && message.includes('github.com') ||
+    message.includes('could not read username') ||
+    /fatal:.*https:\/\/.*github\.com.*40[13]/.test(message)
+  );
+}
 
 function formatSummary(results: WorkerResult[], prUrl: string): string {
   const lines = ['*Worker creation complete!*', ''];
