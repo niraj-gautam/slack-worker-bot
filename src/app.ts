@@ -8,7 +8,10 @@ import {
   resolveUniqueBranchName,
   createFeatureBranch,
   commitAndPush,
+  branchExistsOnRemote,
   ensureBranchExists,
+  findOpenPR,
+  addPRComment,
   createPullRequest,
   cleanupLocalBranch,
   resetLocalRepo,
@@ -44,7 +47,7 @@ const HELP_TEXT = `Hey there! I'm the *Worker Bot* — I create PM2 worker entri
 *Options:*
   \`--test SENDER RECEIVER\` — different ISAs for the TEST worker
   \`--name my-carrier\` — custom worker name
-  \`--branch RELEASE-v1\` — target a specific branch
+  \`--branch RELEASE-v1\` — commit directly on this branch
 
 *Org shortcuts:* medlog/med, universal/uni, forwardair/fa, us/portpro/pp
 *Env shortcuts:* prod/production, sandbox/sand/pre
@@ -85,8 +88,7 @@ app.event('app_mention', async ({ event, client }) => {
     const mapping = getMapping(request.org, request.env);
     const baseBranch = mapping.branch;
     const configFile = mapping.file;
-    const targetBranch = request.branch ?? baseBranch;
-    logger.info(`Parsed: org=${request.org} env=${request.env} workers=${request.workers.length} file=${configFile} baseBranch=${baseBranch} targetBranch=${targetBranch}`);
+    logger.info(`Parsed: org=${request.org} env=${request.env} workers=${request.workers.length} file=${configFile} baseBranch=${baseBranch}${request.branch ? ` commitBranch=${request.branch}` : ''}`);
 
     await say(channel, ts, `Processing *${request.org} ${request.env}* worker request...`);
 
@@ -118,11 +120,21 @@ app.event('app_mention', async ({ event, client }) => {
       return;
     }
 
-    // 2. Prepare git: checkout base branch, pull latest
-    logger.info(`Git: checking out ${baseBranch}`);
-    await say(channel, ts, `Checking out branch \`${baseBranch}\` and pulling latest...`);
-    await prepareBaseBranch(baseBranch);
-    logger.info(`Git: branch ${baseBranch} ready`);
+    // 2. Prepare git: checkout and pull latest
+    const checkoutBranch = request.branch ?? baseBranch;
+    if (request.branch) {
+      logger.info(`Checking if branch ${request.branch} exists on remote`);
+      const exists = await branchExistsOnRemote(request.branch);
+      if (!exists) {
+        logger.info(`Branch ${request.branch} not found, creating from ${baseBranch}`);
+        await say(channel, ts, `Branch \`${request.branch}\` not found — creating it from \`${baseBranch}\`...`);
+        await ensureBranchExists(request.branch, baseBranch);
+      }
+    }
+    logger.info(`Git: checking out ${checkoutBranch}`);
+    await say(channel, ts, `Checking out branch \`${checkoutBranch}\` and pulling latest...`);
+    await prepareBaseBranch(checkoutBranch);
+    logger.info(`Git: branch ${checkoutBranch} ready`);
 
     // 3. Add workers to config file (with duplicate detection)
     const filePath = path.resolve(env.repoLocalPath, configFile);
@@ -145,48 +157,66 @@ app.event('app_mention', async ({ event, client }) => {
       return;
     }
 
-    // 4. Create feature branch, commit, push
+    // 4. Build commit info
     const isaLabel = resolved.length === 1
       ? `${resolved[0].liveISA.customerISA}-${resolved[0].liveISA.companyISA}`
       : `batch-${Date.now()}`;
-    const months = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'];
-    const now = new Date();
-    const dateSuffix = `${now.getDate()}-${months[now.getMonth()]}`;
-    const baseBranchName = `worker/${request.org}-${isaLabel}-${dateSuffix}`.toLowerCase();
-    const featureBranch = await resolveUniqueBranchName(baseBranchName);
-    logger.info(`Feature branch: ${featureBranch}`);
-
-    await createFeatureBranch(featureBranch);
-
     const isaList = created.map(r => {
-      const parts = r.topic.replace('EDI.', '').replace('.204_MOTOR_CARRIER_LOAD_TENDER.TEST', '').replace('.204_MOTOR_CARRIER_LOAD_TENDER.LIVE', '');
-      return parts;
+      return r.topic.replace('EDI.', '').replace('.204_MOTOR_CARRIER_LOAD_TENDER.TEST', '').replace('.204_MOTOR_CARRIER_LOAD_TENDER.LIVE', '');
     });
     const uniqueISAs = [...new Set(isaList)].join(', ');
     const commitMsg = `Add ${request.org} ${request.env} worker(s)\n\nISAs: ${uniqueISAs}`;
-
-    logger.info(`Committing and pushing: ${commitMsg}`);
-    await say(channel, ts, `Committing and pushing to \`${featureBranch}\`...`);
-    await commitAndPush(configFile, featureBranch, commitMsg);
-    logger.info(`Pushed to origin/${featureBranch}`);
-
-    // 5. Ensure target branch exists, then create PR
-    if (targetBranch !== baseBranch) {
-      logger.info(`Ensuring target branch ${targetBranch} exists`);
-      await ensureBranchExists(targetBranch, baseBranch);
-    }
-
     const prTitle = `[Worker] Add ${request.org} ${request.env} worker(s): ${isaLabel}`;
     const prBody = buildPRBody(request.org, request.env, configFile, results);
 
-    logger.info(`Creating PR: ${featureBranch} -> ${targetBranch}`);
-    await say(channel, ts, `Creating PR to \`${targetBranch}\`...`);
-    const prUrl = await createPullRequest(featureBranch, targetBranch, prTitle, prBody);
-    logger.info(`PR created: ${prUrl}`);
+    let prUrl: string;
 
-    // 6. Cleanup: switch back to base branch locally
-    await cleanupLocalBranch(baseBranch, featureBranch);
-    logger.info(`Cleanup done, back on ${baseBranch}`);
+    if (request.branch) {
+      // --branch mode: commit directly on the specified branch, PR to env base branch
+      logger.info(`Committing and pushing to ${request.branch}`);
+      await say(channel, ts, `Committing and pushing to \`${request.branch}\`...`);
+      await commitAndPush(configFile, request.branch, commitMsg);
+      logger.info(`Pushed to origin/${request.branch}`);
+
+      const existingPR = await findOpenPR(request.branch, baseBranch);
+      if (existingPR) {
+        logger.info(`Found existing PR #${existingPR.number}, adding comment`);
+        await say(channel, ts, `Found existing PR #${existingPR.number}, adding comment...`);
+        await addPRComment(existingPR.number, prBody);
+        prUrl = existingPR.html_url;
+      } else {
+        logger.info(`Creating PR: ${request.branch} -> ${baseBranch}`);
+        await say(channel, ts, `Creating PR to \`${baseBranch}\`...`);
+        prUrl = await createPullRequest(request.branch, baseBranch, prTitle, prBody);
+        logger.info(`PR created: ${prUrl}`);
+      }
+
+      await cleanupLocalBranch(baseBranch, request.branch);
+      logger.info(`Cleanup done, back on ${baseBranch}`);
+    } else {
+      // Default mode: create feature branch, PR to base branch
+      const months = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'];
+      const now = new Date();
+      const dateSuffix = `${now.getDate()}-${months[now.getMonth()]}`;
+      const baseBranchName = `worker/${request.org}-${isaLabel}-${dateSuffix}`.toLowerCase();
+      const featureBranch = await resolveUniqueBranchName(baseBranchName);
+      logger.info(`Feature branch: ${featureBranch}`);
+
+      await createFeatureBranch(featureBranch);
+
+      logger.info(`Committing and pushing: ${commitMsg}`);
+      await say(channel, ts, `Committing and pushing to \`${featureBranch}\`...`);
+      await commitAndPush(configFile, featureBranch, commitMsg);
+      logger.info(`Pushed to origin/${featureBranch}`);
+
+      logger.info(`Creating PR: ${featureBranch} -> ${baseBranch}`);
+      await say(channel, ts, `Creating PR to \`${baseBranch}\`...`);
+      prUrl = await createPullRequest(featureBranch, baseBranch, prTitle, prBody);
+      logger.info(`PR created: ${prUrl}`);
+
+      await cleanupLocalBranch(baseBranch, featureBranch);
+      logger.info(`Cleanup done, back on ${baseBranch}`);
+    }
 
     // 7. Report back — in thread, broadcast to channel, mention user
     const userMention = event.user ? `<@${event.user}>` : '';

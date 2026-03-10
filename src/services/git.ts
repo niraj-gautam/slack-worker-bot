@@ -77,6 +77,39 @@ export async function ensureBranchExists(
   }
 }
 
+export async function branchExistsOnRemote(branchName: string): Promise<boolean> {
+  try {
+    await octokit.rest.repos.getBranch({ owner, repo, branch: branchName });
+    return true;
+  } catch (err: any) {
+    if (err.status === 404) return false;
+    throw err;
+  }
+}
+
+export async function findOpenPR(
+  head: string,
+  base: string,
+): Promise<{ number: number; html_url: string } | null> {
+  const { data: prs } = await octokit.rest.pulls.list({
+    owner,
+    repo,
+    head: `${owner}:${head}`,
+    base,
+    state: 'open',
+  });
+  return prs.length > 0 ? { number: prs[0].number, html_url: prs[0].html_url } : null;
+}
+
+export async function addPRComment(prNumber: number, body: string): Promise<void> {
+  await octokit.rest.issues.createComment({
+    owner,
+    repo,
+    issue_number: prNumber,
+    body,
+  });
+}
+
 export async function createPullRequest(
   featureBranch: string,
   targetBranch: string,
