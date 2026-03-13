@@ -124,14 +124,17 @@ export function addWorkersToFile(params: AddWorkersParams): WorkerResult[] {
     return results;
   }
 
-  const insertionText = blocksToInsert.map(b => ',\n' + b).join('');
-
-  // Find the last `]` that closes the apps array and insert before it.
-  // The pattern: find the last occurrence of `]` preceded by `}` (end of last worker entry).
   const lastBracketIdx = content.lastIndexOf(']');
   if (lastBracketIdx === -1) {
     throw new Error('Could not find closing ] in config file.');
   }
+
+  const contentBeforeBracket = content.slice(0, lastBracketIdx);
+  const needsComma = !contentBeforeBracket.trimEnd().endsWith(',');
+
+  const insertionText = blocksToInsert
+    .map((b, i) => (i === 0 && !needsComma ? '\n' + b : ',\n' + b))
+    .join('');
 
   content = content.slice(0, lastBracketIdx) + insertionText + '\n  ' + content.slice(lastBracketIdx);
 
